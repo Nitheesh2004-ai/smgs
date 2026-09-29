@@ -1,0 +1,370 @@
+import { useEffect, useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import GlassNav from "@/components/layout/GlassNav";
+import PageWrapper from "@/components/layout/PageWrapper";
+import GlassCard from "@/components/ui/GlassCard";
+import Loader from "@/components/ui/Loader";
+import { fetchJson } from "@/utils/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { useAuth } from "@/hooks/useAuth";
+import { BookOpen, Filter, Award } from "lucide-react";
+
+// exam types are now filterable. students can view all marks combined or
+// restrict the view to internal/external/lab internal/lab external entries.
+type ExamType = "unit_test_internal_1" | "unit_test_internal_2" | "unit_test_external" | "lab_internal" | "lab_external";
+
+// filter options shown in dropdown
+type ExamFilter = "all" | "internal" | "external" | "lab_internal" | "lab_external";
+
+// human-readable labels for exam types
+const examTypeLabels: Record<ExamType, string> = {
+  unit_test_internal_1: "UT1 Internal",
+  unit_test_internal_2: "UT2 Internal",
+  unit_test_external: "External",
+  lab_internal: "Lab Internal",
+  lab_external: "Lab External",
+};
+
+interface Mark {
+  id: string;
+  semester: number;
+  exam_type: ExamType;
+  marks_obtained: number;
+  total_marks: number;
+  subject_name: string;
+  subject_code: string;
+}
+
+
+const StudentMarks = () => {
+  const { profile, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [studentId, setStudentId] = useState<string | null>(null);
+  const [studentData, setStudentData] = useState<any>(null);
+  const [marks, setMarks] = useState<Mark[]>([]);
+  const [selectedSemester, setSelectedSemester] = useState("1");
+  const [selectedFilter, setSelectedFilter] = useState<ExamFilter>("all");
+
+  useEffect(() => {
+    if (!authLoading && (!profile || profile.role !== "student")) {
+      navigate("/auth?type=student");
+    }
+  }, [profile, authLoading, navigate]);
+
+  useEffect(() => {
+    const fetchStudentId = async () => {
+      if (!profile) return;
+
+      try {
+        const { res, data } = await fetchJson(
+          `/api/students?profile_id=${encodeURIComponent(profile.id)}`
+        );
+
+        if (res.ok) {
+          const student = Array.isArray(data) ? data[0] : data;
+          if (student) {
+            setStudentId(student._id || student.id);
+            setStudentData(student);
+            // Set semester based on year: Year 1 -> Sem 1, Year 2 -> Sem 3, Year 3 -> Sem 5
+            const defaultSemester = String((student.year_of_study - 1) * 2 + 1);
+            setSelectedSemester(defaultSemester);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching student:", error);
+      }
+    };
+
+    if (profile?.role === "student") {
+      fetchStudentId();
+    }
+  }, [profile]);
+
+  useEffect(() => {
+    const fetchMarks = async () => {
+      if (!studentId) return;
+      setLoading(true);
+
+      try {
+        const { res, data } = await fetchJson(
+          `/api/marks?student_id=${studentId}&semester=${selectedSemester}`
+        );
+
+        if (res.ok) {
+          const marksData = Array.isArray(data) ? data : data?.data || [];
+          setMarks(marksData);
+        }
+      } catch (error) {
+        console.error("Error fetching marks:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (studentId) {
+      fetchMarks();
+    }
+  }, [studentId, selectedSemester]);
+
+  // filter raw marks according to chosen exam filter
+  const filteredMarks = useMemo(() => {
+    switch (selectedFilter) {
+      case "internal":
+        return marks.filter(
+          (m) => m.exam_type === "unit_test_internal_1" || m.exam_type === "unit_test_internal_2"
+        );
+      case "external":
+        return marks.filter((m) => m.exam_type === "unit_test_external");
+      case "lab_internal":
+        return marks.filter((m) => m.exam_type === "lab_internal");
+      case "lab_external":
+        return marks.filter((m) => m.exam_type === "lab_external");
+      default:
+        return marks;
+    }
+  }, [marks, selectedFilter]);
+
+  // combine internal/external marks by subject code only when viewing all
+  const displayMarks = useMemo(() => {
+    if (selectedFilter !== "all") {
+      // show raw entries for filtered view
+      return filteredMarks;
+    }
+
+    const map = new Map<string, Mark & { count: number }>();
+    filteredMarks.forEach((m) => {
+      const key = m.subject_code;
+      if (!map.has(key)) {
+        map.set(key, { ...m, count: 1 });
+      } else {
+        const existing = map.get(key)!;
+        existing.marks_obtained += m.marks_obtained;
+        existing.total_marks += m.total_marks;
+        existing.count += 1;
+      }
+    });
+    const arr: Mark[] = [];
+    map.forEach((m) => {
+      if (m.count > 1) {
+        const percent = (m.marks_obtained / m.total_marks) * 100;
+        arr.push({
+          ...m,
+          marks_obtained: parseFloat(percent.toFixed(1)),
+          total_marks: 100,
+        });
+      } else {
+        arr.push(m);
+      }
+    });
+    return arr;
+  }, [filteredMarks, selectedFilter]);
+
+  // Calculate totals based on filtered data
+  const totalMarksObtained = filteredMarks.reduce((sum, m) => sum + m.marks_obtained, 0);
+  const totalMaxMarks = filteredMarks.reduce((sum, m) => sum + m.total_marks, 0);
+  const overallPercentage = totalMaxMarks > 0 ? Math.round((totalMarksObtained / totalMaxMarks) * 100) : 0;
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen mesh-gradient flex items-center justify-center">
+        <Loader size="lg" text="Loading..." />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <GlassNav role="student" userName={profile?.full_name} />
+      <PageWrapper>
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2">Marks Report</h1>
+          <p className="text-muted-foreground">
+            View your examination results and grades
+          </p>
+        </div>
+
+        {/* Student Info */}
+        {studentData && (
+          <GlassCard className="p-6 mb-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm text-muted-foreground">Name</p>
+                <p className="font-semibold">{profile?.full_name}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Roll Number</p>
+                <p className="font-semibold">{studentData.roll_number}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Year</p>
+                <p className="font-semibold">Year {studentData.year_of_study}</p>
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Branch</p>
+                <p className="font-semibold">{studentData.branch_code}</p>
+              </div>
+            </div>
+          </GlassCard>
+        )}
+
+        {/* Semester Selector */}
+        <GlassCard className="p-6 mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <Filter className="w-5 h-5 text-primary" />
+              <span className="font-medium">Select Semester:</span>
+              <Select value={selectedSemester} onValueChange={setSelectedSemester}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {studentData && (() => {
+                    const semesterStart = (studentData.year_of_study - 1) * 2 + 1;
+                    const semesterEnd = studentData.year_of_study * 2;
+                    return [semesterStart, semesterEnd].map((sem) => (
+                      <SelectItem key={sem} value={String(sem)}>
+                        Semester {sem}
+                      </SelectItem>
+                    ));
+                  })()}
+                </SelectContent>
+              </Select>
+            </div>
+            {marks.length > 0 && (
+              <>
+                <div className="flex items-center gap-4">
+                  <span className="text-sm text-muted-foreground">Filter:</span>
+                  <Select value={selectedFilter} onValueChange={(value) => setSelectedFilter(value as ExamFilter)}>
+                    <SelectTrigger className="w-40">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="internal">Internal</SelectItem>
+                      <SelectItem value="external">External</SelectItem>
+                      <SelectItem value="lab_internal">Lab Internal</SelectItem>
+                      <SelectItem value="lab_external">Lab External</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Award className="w-5 h-5 text-primary" />
+                  <span className="text-sm text-muted-foreground">Overall:</span>
+                <span className={`text-xl font-bold ${
+                  overallPercentage >= 75 ? "text-success" : 
+                  overallPercentage >= 50 ? "text-warning" : "text-destructive"
+                }`}>
+                  {overallPercentage}%
+                </span>
+              </div>
+            </>)}
+          </div>
+        </GlassCard>
+
+        {loading ? (
+          <GlassCard className="p-8">
+            <Loader text="Loading marks..." />
+          </GlassCard>
+        ) : marks.length > 0 ? (
+          <div className="space-y-6">
+            <GlassCard className="overflow-hidden">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Subject</TableHead>
+                      <TableHead>Code</TableHead>
+                      {selectedFilter !== "all" && <TableHead className="text-center">Type</TableHead>}
+                      <TableHead className="text-center">Marks Obtained</TableHead>
+                      <TableHead className="text-center">Total Marks</TableHead>
+                      <TableHead className="text-center">Percentage</TableHead>
+                      <TableHead className="text-center">Combined</TableHead>
+                      <TableHead className="text-center">Result</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayMarks.map((mark) => {
+                      const percentage = Math.round((mark.marks_obtained / mark.total_marks) * 100);
+                      return (
+                        <TableRow key={mark.id}>
+                          <TableCell className="font-medium">
+                            {mark.subject_name}
+                          </TableCell>
+                          <TableCell>
+                            <span className="px-2 py-1 rounded-full bg-muted text-xs font-medium">
+                              {mark.subject_code}
+                            </span>
+                          </TableCell>
+                          {selectedFilter !== "all" && (
+                            <TableCell className="text-center text-xs">
+                              {examTypeLabels[mark.exam_type]}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-center font-semibold">
+                            {mark.marks_obtained}
+                          </TableCell>
+                          <TableCell className="text-center text-muted-foreground">
+                            {mark.total_marks}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                percentage >= 75
+                                  ? "bg-success/10 text-success"
+                                  : percentage >= 50
+                                  ? "bg-warning/10 text-warning"
+                                  : "bg-destructive/10 text-destructive"
+                              }`}
+                            >
+                              {percentage}%
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {mark.marks_obtained}/{mark.total_marks}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {percentage >= 50 ? (
+                              <span className="text-success font-semibold">Pass</span>
+                            ) : (
+                              <span className="text-destructive font-semibold">Fail</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </GlassCard>
+          </div>
+        ) : (
+          <GlassCard className="p-16 text-center">
+            <BookOpen className="w-16 h-16 mx-auto mb-4 text-muted-foreground/50" />
+            <h3 className="text-lg font-medium mb-2">No marks found</h3>
+            <p className="text-muted-foreground">
+              No marks have been entered for Semester {selectedSemester} yet.
+            </p>
+          </GlassCard>
+        )}
+      </PageWrapper>
+    </>
+  );
+};
+
+export default StudentMarks;

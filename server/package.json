@@ -1,0 +1,33 @@
+{
+  "name": "smgs-server",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "echo 'Build skipped - using pre-compiled dist folder'",
+    "start": "node dist/index.js",
+    "seed:admin": "ts-node-dev src/seeds/admin.ts",
+    "seed:subjects": "ts-node-dev src/seeds/subjects.ts"
+  },
+  "dependencies": {
+    "@types/bcrypt": "^6.0.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.3.1",
+    "express": "^4.22.1",
+    "jsonwebtoken": "^9.0.0",
+    "mongodb": "^5.9.0",
+    "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "ts-node-dev": "^2.0.0"
+  }
+}
